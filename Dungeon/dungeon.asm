@@ -1,35 +1,33 @@
 .MODEL SMALL
 .STACK 1024
 
-SCR_W EQU 640
-SCR_H EQU 350
-IMG_W EQU 480
-IMG_H EQU 336
-LEFT_MARGIN EQU (SCR_W-VIEW_W)/2
-TOP_MARGIN EQU (SCR_H-VIEW_H)/2
-BUF_SIZE EQU 4096
-
-VIEW_W EQU 160
-VIEW_H EQU 100
+; ------------------ CONSTANTES ----------------------
+SCR_W          EQU 640
+SCR_H          EQU 350
+IMG_W          EQU 480
+IMG_H          EQU 336
+LEFT_MARGIN    EQU (SCR_W - IMG_W) / 2
+TOP_MARGIN     EQU (SCR_H - IMG_H) / 2
+BUF_SIZE       EQU 4096
+VIEW_W         EQU 160
+VIEW_H         EQU 100
 
 .DATA
-FILE_NAME DB 'mapRD.txt', 0
-FILE_HANDLE DW 0
-
-BUFFER DB BUF_SIZE DUP(?)
+FILE_NAME      DB 'mapRD.txt', 0
+FILE_HANDLE    DW 0
+BUFFER         DB BUF_SIZE DUP(?)
 BYTES_IN_BUFFER DW 0
-BUF_INDEX DW 0
-END_FLAG DB 0
+BUF_INDEX      DW 0
+END_FLAG       DB 0
+X_CUR          DW 0
+Y_CUR          DW 0
+VIEW_X         DW 0
+VIEW_Y         DW 0
 
-XCUR DW 0
-YCUR DW 0
+MSG_OPEN_ERR   DB 'ERROR ABRIENDO EL ARCHIVO$', 0
+MSG_READ_ERR   DB 'ERROR LEYENDO EL ARCHIVO$', 0
 
-VIEW_X DW 100 ; Define el inicio del viewport
-VIEW_Y DW 0  ; Define el inicio del viewport
-
-MSG_OPEN_ERR DB 'ERROR ABRIENDO EL ARCHIVO$', 0
-MSG_READ_ERR DB 'ERROR LEYENDO EL ARCHIVO$', 0
-
+; ------------------ CÓDIGO PRINCIPAL ----------------------
 .CODE
 MAIN PROC
     MOV AX, @DATA
@@ -43,17 +41,14 @@ MAIN PROC
     CALL INIT_CURSOR
     MOV END_FLAG, 0
 
-REDRAW:
+READ_LOOP:
     CALL READ_CHUNK
     CMP BYTES_IN_BUFFER, 0
     JE READ_DONE
 
     CALL PARSE_AND_DRAW
     CMP END_FLAG, 1
-    JE READ_DONE
-
-    CALL HANDLE_INPUT
-    JMP REDRAW
+    JNE READ_LOOP
 
 READ_DONE:
     CALL WAIT_KEY
@@ -107,22 +102,23 @@ READ_CHUNK PROC
     INT 21H
     JC READ_ERR
     MOV BYTES_IN_BUFFER, AX
-    MOV BUF_INDEX, 0
+    MOV WORD PTR BUF_INDEX, 0
     RET
+
 READ_ERR:
     MOV BYTES_IN_BUFFER, 0
-    MOV BUF_INDEX, 0
+    MOV WORD PTR BUF_INDEX, 0
     LEA DX, MSG_READ_ERR
     CALL PRINT_STR
     RET
 READ_CHUNK ENDP
 
-; ------------------ CONVERSOR/DIBUJO --------------
+; ------------------ PARSER Y DIBUJO --------------------
 PARSE_AND_DRAW PROC
-.NEXT_BYTE:
+NEXT_BYTE:
     MOV BX, BUF_INDEX
     CMP BX, BYTES_IN_BUFFER
-    JAE .DONE
+    JAE DONE
 
     MOV SI, BX
     MOV AL, BUFFER[SI]
@@ -131,43 +127,46 @@ PARSE_AND_DRAW PROC
 
     MOV DL, AL
     CALL HEX_TO_NIBBLE
-    JNC .IS_PIXEL
+    JNC IS_PIXEL
 
     MOV AL, DL
     CMP AL, '@'
-    JE .END_OF_LINE
-    CMP AL, '$'
-    JE .END_OF_FILE
+    JE END_OF_LINE
+    CMP AL, '%'
+    JE END_OF_FILE
     CMP AL, 13
-    JE .NEXT_BYTE
+    JE NEXT_BYTE
     CMP AL, 10
-    JE .NEXT_BYTE
+    JE NEXT_BYTE
     CMP AL, ' '
-    JE .NEXT_BYTE
-    JMP .NEXT_BYTE
+    JE NEXT_BYTE
+    JMP NEXT_BYTE
 
-.IS_PIXEL:
-    MOV BX, XCUR
+IS_PIXEL:
+    MOV BX, X_CUR
     CMP BX, IMG_W
-    JAE .STEP_X
-    MOV BX, YCUR
+    JAE STEP_X
+    MOV BX, Y_CUR
     CMP BX, IMG_H
-    JAE .STEP_X
+    JAE STEP_X
     CALL DRAW_PIXEL
-.STEP_X:
-    INC XCUR
-    JMP .NEXT_BYTE
 
-.END_OF_LINE:
+STEP_X:
+    INC WORD PTR X_CUR
+    JMP NEXT_BYTE
+
+END_OF_LINE:
     CALL NEXT_ROW
-    JMP .NEXT_BYTE
+    JMP NEXT_BYTE
 
-.END_OF_FILE:
+END_OF_FILE:
     MOV END_FLAG, 1
-.DONE:
+
+DONE:
     RET
 PARSE_AND_DRAW ENDP
 
+; ------------------ CONVERSOR HEX --------------------
 HEX_TO_NIBBLE PROC
     CMP AL, '0'
     JB NOT_HEX
@@ -178,46 +177,55 @@ HEX_TO_NIBBLE PROC
     CMP AL, 'F'
     JBE UP_DIGIT
     JMP CHK_LOWER
+
 DEC_DIGIT:
     SUB AL, '0'
     CLC
     RET
+
 UP_DIGIT:
     SUB AL, 'A'
     ADD AL, 10
     CLC
     RET
+
 CHK_LOWER:
     CMP AL, 'a'
     JB NOT_HEX
     CMP AL, 'f'
     JBE LO_DIGIT
     JMP NOT_HEX
+
 LO_DIGIT:
     SUB AL, 'a'
     ADD AL, 10
     CLC
     RET
+
 NOT_HEX:
     STC
     RET
 HEX_TO_NIBBLE ENDP
 
+; ------------------ DIBUJO DE PIXEL --------------------
 DRAW_PIXEL PROC
+    ; AL = color
+    ; X_CUR, Y_CUR = posición absoluta en el mapa
+    ; VIEW_X, VIEW_Y = origen del viewport
     PUSH BX
     PUSH CX
     PUSH DX
 
-    MOV BX, XCUR
+    MOV BX, X_CUR
     SUB BX, VIEW_X
     CMP BX, VIEW_W
-    JAE .SKIP
+    JAE SKIP
     MOV CX, BX
 
-    MOV BX, YCUR
+    MOV BX, Y_CUR
     SUB BX, VIEW_Y
     CMP BX, VIEW_H
-    JAE .SKIP
+    JAE SKIP
     MOV DX, BX
 
     ADD CX, LEFT_MARGIN
@@ -227,25 +235,27 @@ DRAW_PIXEL PROC
     XOR BH, BH
     INT 10H
 
-.SKIP:
+SKIP:
     POP DX
     POP CX
     POP BX
     RET
 DRAW_PIXEL ENDP
 
+; ------------------ FILAS / CURSOR --------------------
 NEXT_ROW PROC
-    INC YCUR
-    MOV XCUR, 0
+    INC WORD PTR Y_CUR
+    MOV WORD PTR X_CUR, 0
     RET
 NEXT_ROW ENDP
 
 INIT_CURSOR PROC
-    MOV XCUR, 0
-    MOV YCUR, 0
+    MOV WORD PTR X_CUR, 0
+    MOV WORD PTR Y_CUR, 0
     RET
 INIT_CURSOR ENDP
 
+; ------------------ ENTRADA / SALIDA --------------------
 WAIT_KEY PROC
     MOV AH, 00H
     INT 16H
@@ -257,52 +267,5 @@ PRINT_STR PROC
     INT 21H
     RET
 PRINT_STR ENDP
-
-HANDLE_INPUT PROC
-    MOV AH, 00H
-    INT 16H
-    CMP AL, 'W'
-    JE MOVE_UP
-    CMP AL, 'S'
-    JE MOVE_DOWN
-    CMP AL, 'A'
-    JE MOVE_LEFT
-    CMP AL, 'D'
-    JE MOVE_RIGHT
-    RET
-
-MOVE_UP:
-    CMP VIEW_Y, 0
-    JBE .LIMIT_UP
-    DEC VIEW_Y
-.LIMIT_UP:
-    RET
-
-MOVE_DOWN:
-    MOV AX, VIEW_Y
-    ADD AX, VIEW_H
-    CMP AX, IMG_H
-    JAE .LIMIT_DOWN
-    INC VIEW_Y
-.LIMIT_DOWN:
-    RET
-
-MOVE_LEFT:
-    CMP VIEW_X, 0
-    JBE .LIMIT_LEFT
-    DEC VIEW_X
-.LIMIT_LEFT:
-    RET
-
-MOVE_RIGHT:
-    MOV AX, VIEW_X
-    ADD AX, VIEW_W
-    CMP AX, IMG_W
-    JAE .LIMIT_RIGHT
-    INC VIEW_X
-.LIMIT_RIGHT:
-    RET
-
-HANDLE_INPUT ENDP
 
 END MAIN
