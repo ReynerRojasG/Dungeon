@@ -11,6 +11,7 @@ TOP_MARGIN     EQU (SCR_H - IMG_H) / 2
 BUF_SIZE       EQU 4096
 VIEW_W         EQU 160
 VIEW_H         EQU 100
+SCALE_FACTOR   EQU 2     ; Factor de escalado 2x
 
 .DATA
 FILE_NAME      DB 'mapRD.txt', 0
@@ -246,7 +247,7 @@ IS_VIEW_PIXEL:
     JAE VIEW_STEP_X
     
     ; Dibujar pixel (AL ya tiene el color)
-    CALL DRAW_VIEWPORT_PIXEL
+    CALL DRAW_SCALED_PIXEL
 
 VIEW_STEP_X:
     INC WORD PTR X_CUR
@@ -263,28 +264,48 @@ VIEW_DONE:
     RET
 PARSE_AND_DRAW_VIEWPORT ENDP
 
-DRAW_VIEWPORT_PIXEL PROC
+; ------------------ DIBUJO DE PIXEL ESCALADO CORREGIDO --------------------
+DRAW_SCALED_PIXEL PROC
     ; AL = color
-    ; CX = X relativo al viewport (ya calculado)
-    ; DX = Y relativo al viewport (ya calculado)
+    ; CX = X relativo al viewport
+    ; DX = Y relativo al viewport
     PUSH AX
     PUSH BX
     PUSH CX
     PUSH DX
+    PUSH SI
+    
+    ; Calcular posición base en pantalla
+    MOV SI, CX          ; Guardar X original
+    SHL CX, 1           ; CX = X * 2 (escalado 2x)
+    SHL DX, 1           ; DX = Y * 2 (escalado 2x)
     
     ADD CX, LEFT_MARGIN
     ADD DX, TOP_MARGIN
     
+    ; Dibujar bloque 2x2
     MOV AH, 0CH
     XOR BH, BH
-    INT 10H
     
+    ; Fila superior
+    INT 10H             ; (CX, DX)
+    INC CX
+    INT 10H             ; (CX+1, DX)
+    
+    ; Fila inferior
+    DEC CX
+    INC DX
+    INT 10H             ; (CX, DX+1)
+    INC CX
+    INT 10H             ; (CX+1, DX+1)
+    
+    POP SI
     POP DX
     POP CX
     POP BX
     POP AX
     RET
-DRAW_VIEWPORT_PIXEL ENDP
+DRAW_SCALED_PIXEL ENDP
 
 VIEW_NEXT_ROW PROC
     INC WORD PTR Y_CUR
