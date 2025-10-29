@@ -26,6 +26,8 @@ VIEW_Y         DW 0
 
 MSG_OPEN_ERR   DB 'ERROR ABRIENDO EL ARCHIVO$', 0
 MSG_READ_ERR   DB 'ERROR LEYENDO EL ARCHIVO$', 0
+MSG_CONTROLS   DB 'WASD: Mover  Q: Salir$', 0
+MSG_POSITION   DB 'Viewport: $', 0
 
 ; ------------------ CÓDIGO PRINCIPAL ----------------------
 .CODE
@@ -41,17 +43,24 @@ MAIN PROC
     CALL INIT_CURSOR
     MOV END_FLAG, 0
 
-READ_LOOP:
-    CALL READ_CHUNK
-    CMP BYTES_IN_BUFFER, 0
-    JE READ_DONE
+    ; Cargar y dibujar el mapa completo en memoria virtual
+    CALL LOAD_ENTIRE_MAP
 
-    CALL PARSE_AND_DRAW
-    CMP END_FLAG, 1
-    JNE READ_LOOP
-
-READ_DONE:
+NAVIGATION_LOOP:
+    CALL CLEAR_SCREEN
+    CALL DRAW_VIEWPORT
+    CALL SHOW_INFO
     CALL WAIT_KEY
+    
+    CMP AL, 'q'
+    JE EXIT_PROGRAM
+    CMP AL, 'Q'
+    JE EXIT_PROGRAM
+    
+    CALL PROCESS_KEY
+    JMP NAVIGATION_LOOP
+
+EXIT_PROGRAM:
     MOV BX, FILE_HANDLE
     CALL CLOSE_FILE
     JMP EXIT_OK
@@ -66,6 +75,389 @@ EXIT_OK:
     MOV AX, 4C00H
     INT 21H
 MAIN ENDP
+
+; ------------------ CARGA COMPLETA DEL MAPA ------------------
+LOAD_ENTIRE_MAP PROC
+    ; Reiniciar posición del cursor para carga completa
+    MOV WORD PTR X_CUR, 0
+    MOV WORD PTR Y_CUR, 0
+    
+READ_MAP_LOOP:
+    CALL READ_CHUNK
+    CMP BYTES_IN_BUFFER, 0
+    JE MAP_LOADED
+
+    CALL PARSE_MAP_DATA
+    CMP END_FLAG, 1
+    JNE READ_MAP_LOOP
+
+MAP_LOADED:
+    ; Reiniciar file handle para posibles re-lecturas
+    MOV AX, FILE_HANDLE
+    PUSH AX
+    CALL CLOSE_FILE
+    CALL OPEN_FILE
+    MOV FILE_HANDLE, AX
+    POP AX
+    RET
+LOAD_ENTIRE_MAP ENDP
+
+; ------------------ PARSER PARA CARGA --------------------
+PARSE_MAP_DATA PROC
+NEXT_MAP_BYTE:
+    MOV BX, BUF_INDEX
+    CMP BX, BYTES_IN_BUFFER
+    JAE MAP_DONE
+
+    MOV SI, BX
+    MOV AL, BUFFER[SI]
+    INC BX
+    MOV BUF_INDEX, BX
+
+    MOV DL, AL
+    CALL HEX_TO_NIBBLE
+    JNC IS_MAP_PIXEL
+
+    MOV AL, DL
+    CMP AL, '@'
+    JE MAP_END_LINE
+    CMP AL, '%'
+    JE MAP_END_FILE
+    CMP AL, 13
+    JE NEXT_MAP_BYTE
+    CMP AL, 10
+    JE NEXT_MAP_BYTE
+    CMP AL, ' '
+    JE NEXT_MAP_BYTE
+    JMP NEXT_MAP_BYTE
+
+IS_MAP_PIXEL:
+    ; Aquí podrías almacenar el pixel en un buffer de mapa completo
+    ; Por ahora solo avanzamos las coordenadas
+    JMP MAP_STEP_X
+
+MAP_STEP_X:
+    INC WORD PTR X_CUR
+    JMP NEXT_MAP_BYTE
+
+MAP_END_LINE:
+    CALL MAP_NEXT_ROW
+    JMP NEXT_MAP_BYTE
+
+MAP_END_FILE:
+    MOV END_FLAG, 1
+
+MAP_DONE:
+    RET
+PARSE_MAP_DATA ENDP
+
+MAP_NEXT_ROW PROC
+    INC WORD PTR Y_CUR
+    MOV WORD PTR X_CUR, 0
+    RET
+MAP_NEXT_ROW ENDP
+
+; ------------------ DIBUJO DEL VIEWPORT --------------------
+DRAW_VIEWPORT PROC
+    ; Esta función dibuja solo la porción visible del mapa
+    ; basado en VIEW_X y VIEW_Y
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+    PUSH DI
+    
+    ; Reiniciar posición del cursor para dibujar viewport
+    MOV WORD PTR X_CUR, 0
+    MOV WORD PTR Y_CUR, 0
+    MOV END_FLAG, 0
+    
+    ; Posicionar archivo al inicio
+    MOV BX, FILE_HANDLE
+    CALL CLOSE_FILE
+    CALL OPEN_FILE
+    MOV FILE_HANDLE, AX
+
+DRAW_LOOP:
+    CALL READ_CHUNK
+    CMP BYTES_IN_BUFFER, 0
+    JE DRAW_DONE
+
+    CALL PARSE_AND_DRAW_VIEWPORT
+    CMP END_FLAG, 1
+    JNE DRAW_LOOP
+
+DRAW_DONE:
+    POP DI
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+DRAW_VIEWPORT ENDP
+
+; ------------------ PARSER PARA VIEWPORT --------------------
+PARSE_AND_DRAW_VIEWPORT PROC
+NEXT_VIEW_BYTE:
+    MOV BX, BUF_INDEX
+    CMP BX, BYTES_IN_BUFFER
+    JAE VIEW_DONE
+
+    MOV SI, BX
+    MOV AL, BUFFER[SI]
+    INC BX
+    MOV BUF_INDEX, BX
+
+    MOV DL, AL
+    CALL HEX_TO_NIBBLE
+    JNC IS_VIEW_PIXEL
+
+    MOV AL, DL
+    CMP AL, '@'
+    JE VIEW_END_LINE
+    CMP AL, '%'
+    JE VIEW_END_FILE
+    CMP AL, 13
+    JE NEXT_VIEW_BYTE
+    CMP AL, 10
+    JE NEXT_VIEW_BYTE
+    CMP AL, ' '
+    JE NEXT_VIEW_BYTE
+    JMP NEXT_VIEW_BYTE
+
+IS_VIEW_PIXEL:
+    ; Verificar si el pixel está dentro del viewport
+    MOV BX, X_CUR
+    CMP BX, VIEW_X
+    JB VIEW_STEP_X
+    MOV CX, BX
+    SUB CX, VIEW_X
+    CMP CX, VIEW_W
+    JAE VIEW_STEP_X
+    
+    MOV BX, Y_CUR
+    CMP BX, VIEW_Y
+    JB VIEW_STEP_X
+    MOV DX, BX
+    SUB DX, VIEW_Y
+    CMP DX, VIEW_H
+    JAE VIEW_STEP_X
+    
+    ; Dibujar pixel (AL ya tiene el color)
+    CALL DRAW_VIEWPORT_PIXEL
+
+VIEW_STEP_X:
+    INC WORD PTR X_CUR
+    JMP NEXT_VIEW_BYTE
+
+VIEW_END_LINE:
+    CALL VIEW_NEXT_ROW
+    JMP NEXT_VIEW_BYTE
+
+VIEW_END_FILE:
+    MOV END_FLAG, 1
+
+VIEW_DONE:
+    RET
+PARSE_AND_DRAW_VIEWPORT ENDP
+
+DRAW_VIEWPORT_PIXEL PROC
+    ; AL = color
+    ; CX = X relativo al viewport (ya calculado)
+    ; DX = Y relativo al viewport (ya calculado)
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    
+    ADD CX, LEFT_MARGIN
+    ADD DX, TOP_MARGIN
+    
+    MOV AH, 0CH
+    XOR BH, BH
+    INT 10H
+    
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+DRAW_VIEWPORT_PIXEL ENDP
+
+VIEW_NEXT_ROW PROC
+    INC WORD PTR Y_CUR
+    MOV WORD PTR X_CUR, 0
+    RET
+VIEW_NEXT_ROW ENDP
+
+; ------------------ NAVEGACIÓN --------------------
+PROCESS_KEY PROC
+    CMP AL, 'w'
+    JE MOVE_UP
+    CMP AL, 'W'
+    JE MOVE_UP
+    CMP AL, 's'
+    JE MOVE_DOWN
+    CMP AL, 'S'
+    JE MOVE_DOWN
+    CMP AL, 'a'
+    JE MOVE_LEFT
+    CMP AL, 'A'
+    JE MOVE_LEFT
+    CMP AL, 'd'
+    JE MOVE_RIGHT
+    CMP AL, 'D'
+    JE MOVE_RIGHT
+    RET
+
+MOVE_UP:
+    CMP VIEW_Y, 0
+    JE NO_MOVE
+    SUB VIEW_Y, 10
+    RET
+
+MOVE_DOWN:
+    MOV AX, VIEW_Y
+    ADD AX, VIEW_H
+    ADD AX, 10
+    CMP AX, IMG_H
+    JAE NO_MOVE
+    ADD VIEW_Y, 10
+    RET
+
+MOVE_LEFT:
+    CMP VIEW_X, 0
+    JE NO_MOVE
+    SUB VIEW_X, 10
+    RET
+
+MOVE_RIGHT:
+    MOV AX, VIEW_X
+    ADD AX, VIEW_W
+    ADD AX, 10
+    CMP AX, IMG_W
+    JAE NO_MOVE
+    ADD VIEW_X, 10
+    RET
+
+NO_MOVE:
+    RET
+PROCESS_KEY ENDP
+
+; ------------------ INTERFAZ --------------------
+SHOW_INFO PROC
+    ; Mostrar información en modo texto sobre el gráfico
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+    PUSH DI
+    
+    CALL DRAW_TEXT_INFO
+    
+    POP DI
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+SHOW_INFO ENDP
+
+DRAW_TEXT_INFO PROC
+    ; Usar funciones BIOS para dibujar texto en modo gráfico
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 22
+    MOV DL, 1
+    INT 10h
+    
+    LEA SI, MSG_POSITION
+    CALL PRINT_GRAPHIC_TEXT
+    
+    ; Mostrar coordenadas del viewport
+    MOV AX, VIEW_X
+    CALL PRINT_NUMBER
+    MOV AL, ','
+    CALL PRINT_CHAR
+    MOV AX, VIEW_Y
+    CALL PRINT_NUMBER
+    
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 23
+    MOV DL, 1
+    INT 10h
+    
+    LEA SI, MSG_CONTROLS
+    CALL PRINT_GRAPHIC_TEXT
+    
+    RET
+DRAW_TEXT_INFO ENDP
+
+PRINT_GRAPHIC_TEXT PROC
+    ; Imprimir texto en modo gráfico
+    MOV AH, 0Eh
+    XOR BH, BH
+PRINT_LOOP:
+    LODSB
+    CMP AL, '$'
+    JE PRINT_DONE
+    INT 10h
+    JMP PRINT_LOOP
+PRINT_DONE:
+    RET
+PRINT_GRAPHIC_TEXT ENDP
+
+PRINT_NUMBER PROC
+    ; Imprimir número en AX
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    
+    MOV CX, 0
+    MOV BX, 10
+DIV_LOOP:
+    XOR DX, DX
+    DIV BX
+    PUSH DX
+    INC CX
+    TEST AX, AX
+    JNZ DIV_LOOP
+    
+PRINT_LOOP_NUM:
+    POP AX
+    ADD AL, '0'
+    MOV AH, 0Eh
+    INT 10h
+    LOOP PRINT_LOOP_NUM
+    
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+PRINT_NUMBER ENDP
+
+PRINT_CHAR PROC
+    ; Imprimir carácter en AL
+    MOV AH, 0Eh
+    INT 10h
+    RET
+PRINT_CHAR ENDP
+
+CLEAR_SCREEN PROC
+    MOV AX, 0600h
+    MOV BH, 0
+    MOV CX, 0000h
+    MOV DX, 184Fh
+    INT 10h
+    RET
+CLEAR_SCREEN ENDP
 
 ; ------------------ VIDEO ----------------------
 SET_VIDEO_MODE PROC
@@ -113,59 +505,6 @@ READ_ERR:
     RET
 READ_CHUNK ENDP
 
-; ------------------ PARSER Y DIBUJO --------------------
-PARSE_AND_DRAW PROC
-NEXT_BYTE:
-    MOV BX, BUF_INDEX
-    CMP BX, BYTES_IN_BUFFER
-    JAE DONE
-
-    MOV SI, BX
-    MOV AL, BUFFER[SI]
-    INC BX
-    MOV BUF_INDEX, BX
-
-    MOV DL, AL
-    CALL HEX_TO_NIBBLE
-    JNC IS_PIXEL
-
-    MOV AL, DL
-    CMP AL, '@'
-    JE END_OF_LINE
-    CMP AL, '%'
-    JE END_OF_FILE
-    CMP AL, 13
-    JE NEXT_BYTE
-    CMP AL, 10
-    JE NEXT_BYTE
-    CMP AL, ' '
-    JE NEXT_BYTE
-    JMP NEXT_BYTE
-
-IS_PIXEL:
-    MOV BX, X_CUR
-    CMP BX, IMG_W
-    JAE STEP_X
-    MOV BX, Y_CUR
-    CMP BX, IMG_H
-    JAE STEP_X
-    CALL DRAW_PIXEL
-
-STEP_X:
-    INC WORD PTR X_CUR
-    JMP NEXT_BYTE
-
-END_OF_LINE:
-    CALL NEXT_ROW
-    JMP NEXT_BYTE
-
-END_OF_FILE:
-    MOV END_FLAG, 1
-
-DONE:
-    RET
-PARSE_AND_DRAW ENDP
-
 ; ------------------ CONVERSOR HEX --------------------
 HEX_TO_NIBBLE PROC
     CMP AL, '0'
@@ -207,48 +546,7 @@ NOT_HEX:
     RET
 HEX_TO_NIBBLE ENDP
 
-; ------------------ DIBUJO DE PIXEL --------------------
-DRAW_PIXEL PROC
-    ; AL = color
-    ; X_CUR, Y_CUR = posición absoluta en el mapa
-    ; VIEW_X, VIEW_Y = origen del viewport
-    PUSH BX
-    PUSH CX
-    PUSH DX
-
-    MOV BX, X_CUR
-    SUB BX, VIEW_X
-    CMP BX, VIEW_W
-    JAE SKIP
-    MOV CX, BX
-
-    MOV BX, Y_CUR
-    SUB BX, VIEW_Y
-    CMP BX, VIEW_H
-    JAE SKIP
-    MOV DX, BX
-
-    ADD CX, LEFT_MARGIN
-    ADD DX, TOP_MARGIN
-
-    MOV AH, 0CH
-    XOR BH, BH
-    INT 10H
-
-SKIP:
-    POP DX
-    POP CX
-    POP BX
-    RET
-DRAW_PIXEL ENDP
-
 ; ------------------ FILAS / CURSOR --------------------
-NEXT_ROW PROC
-    INC WORD PTR Y_CUR
-    MOV WORD PTR X_CUR, 0
-    RET
-NEXT_ROW ENDP
-
 INIT_CURSOR PROC
     MOV WORD PTR X_CUR, 0
     MOV WORD PTR Y_CUR, 0
