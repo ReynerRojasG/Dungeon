@@ -12,6 +12,7 @@ BUF_SIZE       EQU 4096
 VIEW_W         EQU 160
 VIEW_H         EQU 100
 SCALE_FACTOR   EQU 2     ; Factor de escalado 2x
+PLAYER_SIZE    EQU 16    ; Tamaño del sprite 16x16
 
 .DATA
 FILE_NAME      DB 'mapRD.txt', 0
@@ -30,6 +31,23 @@ MSG_READ_ERR   DB 'ERROR LEYENDO EL ARCHIVO$', 0
 MSG_CONTROLS   DB 'WASD: Mover  Q: Salir$', 0
 MSG_POSITION   DB 'Viewport: $', 0
 
+PLAYER_SPRITE db \
+'TTTTT000000TTTTT', \
+'TTTT0EEEE660TTTT', \
+'TTT0EEEEEE660TTT', \
+'TT004444444400TT', \
+'T0EEEEEEEEEEEE0T', \
+'0EE6000000006EE0', \
+'0E606006000006E0', \
+'T06007007000060T', \
+'TT000F60F60000TT', \
+'TTT066666600TTTT', \
+'TTTT06666040TTTT', \
+'TTT046E644440TTT', \
+'TT064EEE40660TTT', \
+'TT06099990660TTT', \
+'TTT009009900TTTT', \
+'TTTT060T060TTTTT'
 ; ------------------ CÓDIGO PRINCIPAL ----------------------
 .CODE
 MAIN PROC
@@ -50,6 +68,7 @@ MAIN PROC
 NAVIGATION_LOOP:
     CALL CLEAR_SCREEN
     CALL DRAW_VIEWPORT
+    CALL DRAW_PLAYER     ; Dibujar jugador después del mapa
     CALL SHOW_INFO
     CALL WAIT_KEY
     
@@ -76,6 +95,139 @@ EXIT_OK:
     MOV AX, 4C00H
     INT 21H
 MAIN ENDP
+
+; ------------------ DIBUJO DEL JUGADOR --------------------
+DRAW_PLAYER PROC
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+    PUSH DI
+    
+    ; Calcular posición del jugador en el centro del viewport
+    ; Centro X = LEFT_MARGIN + (VIEW_W * SCALE_FACTOR) / 2 - (PLAYER_SIZE * SCALE_FACTOR)/2
+    ; Centro Y = TOP_MARGIN + (VIEW_H * SCALE_FACTOR) / 2 - (PLAYER_SIZE * SCALE_FACTOR)/2
+    
+    MOV AX, VIEW_W
+    SHL AX, 1           ; AX = VIEW_W * 2 (escalado)
+    SHR AX, 1           ; Dividir entre 2
+    MOV BX, PLAYER_SIZE
+    SHL BX, 1           ; BX = PLAYER_SIZE * 2 (escalado)
+    SHR BX, 1           ; Dividir entre 2
+    SUB AX, BX
+    ADD AX, LEFT_MARGIN
+    MOV CX, AX          ; CX = X posición del jugador
+    
+    MOV AX, VIEW_H
+    SHL AX, 1           ; AX = VIEW_H * 2 (escalado)
+    SHR AX, 1           ; Dividir entre 2
+    MOV BX, PLAYER_SIZE
+    SHL BX, 1           ; BX = PLAYER_SIZE * 2 (escalado)
+    SHR BX, 1           ; Dividir entre 2
+    SUB AX, BX
+    ADD AX, TOP_MARGIN
+    MOV DX, AX          ; DX = Y posición del jugador
+    
+    ; Dibujar sprite del jugador ESCALADO
+    LEA SI, PLAYER_SPRITE
+    CALL DRAW_SCALED_SPRITE
+    
+    POP DI
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+DRAW_PLAYER ENDP
+
+; ------------------ DIBUJO DE SPRITE ESCALADO --------------------
+DRAW_SCALED_SPRITE PROC
+    ; SI = offset del sprite
+    ; CX = X posición
+    ; DX = Y posición
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+    PUSH DI
+    
+    MOV DI, DX          ; DI = Y inicial
+    MOV BX, 0           ; Contador de filas
+    
+SCALED_SPRITE_ROW_LOOP:
+    CMP BX, PLAYER_SIZE
+    JE SCALED_SPRITE_DONE
+    
+    PUSH CX             ; Guardar X inicial
+    MOV DX, DI          ; DX = Y actual
+    
+    MOV AH, 0           ; Contador de columnas
+SCALED_SPRITE_COL_LOOP:
+    CMP AH, PLAYER_SIZE
+    JE SCALED_SPRITE_NEXT_ROW
+    
+    ; Leer carácter del sprite
+    MOV AL, [SI]
+    
+    ; Verificar si es transparente ('T')
+    CMP AL, 'T'
+    JE SCALED_SKIP_PIXEL
+    
+    ; Si no es 'T', convertir de hexadecimal
+    CALL HEX_TO_NIBBLE
+    JC SCALED_SKIP_PIXEL
+    
+    ; Dibujar bloque escalado 2x2
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    
+    MOV AH, 0CH         ; Función dibujar pixel
+    XOR BH, BH          ; Página 0
+    
+    ; Fila superior del bloque escalado
+    INT 10H             ; (CX, DX)
+    INC CX
+    INT 10H             ; (CX+1, DX)
+    
+    ; Fila inferior del bloque escalado
+    DEC CX
+    INC DX
+    INT 10H             ; (CX, DX+1)
+    INC CX
+    INT 10H             ; (CX+1, DX+1)
+    
+    DEC DX              ; Restaurar Y original
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    
+SCALED_SKIP_PIXEL:
+    INC SI              ; Siguiente carácter del sprite
+    ADD CX, 2           ; Siguiente columna (escalado 2x)
+    INC AH              ; Incrementar contador de columnas
+    JMP SCALED_SPRITE_COL_LOOP
+
+SCALED_SPRITE_NEXT_ROW:
+    POP CX              ; Restaurar X inicial
+    ADD DI, 2           ; Siguiente fila (escalado 2x)
+    INC BX              ; Incrementar contador de filas
+    JMP SCALED_SPRITE_ROW_LOOP
+
+SCALED_SPRITE_DONE:
+    POP DI
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+DRAW_SCALED_SPRITE ENDP
 
 ; ------------------ CARGA COMPLETA DEL MAPA ------------------
 LOAD_ENTIRE_MAP PROC

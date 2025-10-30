@@ -5,26 +5,23 @@ from tkinter import filedialog, messagebox
 
 # Paleta VGA de 16 colores
 vga_palette = {
-    (0, 0, 0): '0',         # Negro
-    (0, 0, 170): '1',       # Azul
-    (0, 170, 0): '2',       # Verde
-    (0, 170, 170): '3',     # Cyan
-    (170, 0, 0): '4',       # Rojo
-    (170, 0, 170): '5',     # Magenta
-    (170, 85, 0): '6',      # Marrón
-    (170, 170, 170): '7',   # Blanco
-    (85, 85, 85): '8',      # Gris oscuro
-    (85, 85, 255): '9',     # Azul claro
-    (85, 255, 85): 'A',     # Verde claro
-    (85, 255, 255): 'B',    # Cyan claro
-    (255, 85, 85): 'C',     # Rojo claro
-    (255, 85, 255): 'D',    # Magenta claro
-    (255, 255, 85): 'E',    # Amarillo
-    (255, 255, 255): 'F'    # Blanco brillante
+    (0, 0, 0): '0',
+    (0, 0, 170): '1',
+    (0, 170, 0): '2',
+    (0, 170, 170): '3',
+    (170, 0, 0): '4',
+    (170, 0, 170): '5',
+    (170, 85, 0): '6',
+    (170, 170, 170): '7',
+    (85, 85, 85): '8',
+    (85, 85, 255): '9',
+    (85, 255, 85): 'A',
+    (85, 255, 255): 'B',
+    (255, 85, 85): 'C',
+    (255, 85, 255): 'D',
+    (255, 255, 85): 'E',
+    (255, 255, 255): 'F'
 }
-
-# Inversa para visualización
-hex_to_rgb = {v: k for k, v in vga_palette.items()}
 
 def color_mas_cercano(r, g, b):
     menor_diferencia = float('inf')
@@ -47,7 +44,8 @@ def convertir_a_txt():
     path_txt = os.path.join(os.getcwd(), nombre_txt)
 
     try:
-        img = Image.open(path_imagen).convert("RGB")
+        # Convertimos a RGBA para poder leer la transparencia
+        img = Image.open(path_imagen).convert("RGBA")
         ancho, alto = img.size
     except Exception as e:
         messagebox.showerror("Error", f"No se pudo abrir la imagen: {e}")
@@ -56,47 +54,18 @@ def convertir_a_txt():
     with open(path_txt, 'w') as archivo:
         for y in range(alto):
             for x in range(ancho):
-                r, g, b = img.getpixel((x, y))
-                color = color_mas_cercano(r, g, b)
-                archivo.write(color)
+                r, g, b, a = img.getpixel((x, y))
+
+                # Si es totalmente transparente (alfa 0)
+                if a == 0:
+                    archivo.write('T')
+                else:
+                    color = color_mas_cercano(r, g, b)
+                    archivo.write(color)
             archivo.write('@\n')
         archivo.write('$')
 
     messagebox.showinfo("Éxito", f"Archivo generado: {nombre_txt}")
-
-def visualizar_txt():
-    nombre_txt = entrada_usuario.get()
-    if not nombre_txt.endswith('.txt'):
-        nombre_txt += '.txt'
-    path_txt = os.path.abspath(nombre_txt)
-
-    try:
-        with open(path_txt, 'r', encoding='utf-8') as archivo:
-            lineas = archivo.readlines()
-    except Exception as e:
-        messagebox.showerror("Error", f"No se pudo leer el archivo: {e}")
-        return
-
-    ancho = max(len(linea.strip('@\n')) for linea in lineas)
-    alto = len(lineas)
-
-    ventana = tk.Toplevel()
-    ventana.title("Visualizador 8086")
-    canvas = tk.Canvas(ventana, width=ancho, height=alto)
-    canvas.pack()
-
-    y = 0
-    for linea in lineas:
-        x = 0
-        for caracter in linea.strip():
-            if caracter == '@':
-                y += 1
-                break
-            if caracter == '$':
-                break
-            color = hex_to_rgb.get(caracter, (0, 0, 0))
-            canvas.create_rectangle(x, y, x+1, y+1, fill=f'#{color[0]:02x}{color[1]:02x}{color[2]:02x}', outline='')
-            x += 1
 
 def seleccionar_imagen():
     ruta = filedialog.askopenfilename(
@@ -119,9 +88,6 @@ def crear_interfaz():
 
     btn_convertir = tk.Button(ventana, text="Convertir imagen a .txt", command=convertir_a_txt)
     btn_convertir.pack(pady=10)
-
-    btn_visualizar = tk.Button(ventana, text="Visualizar archivo .txt", command=visualizar_txt)
-    btn_visualizar.pack(pady=10)
 
     ventana.mainloop()
 
