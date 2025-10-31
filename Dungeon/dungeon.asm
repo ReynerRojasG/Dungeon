@@ -9,8 +9,8 @@ IMG_H          EQU 336
 LEFT_MARGIN    EQU (SCR_W - IMG_W) / 2
 TOP_MARGIN     EQU (SCR_H - IMG_H) / 2
 BUF_SIZE       EQU 4096
-VIEW_W         EQU 160
-VIEW_H         EQU 100
+VIEW_W         EQU 176
+VIEW_H         EQU 112
 SCALE_FACTOR   EQU 2     ; Factor de escalado 2x
 PLAYER_SIZE    EQU 16    ; Tamaño del sprite 16x16
 
@@ -488,31 +488,31 @@ PROCESS_KEY PROC
 MOVE_UP:
     CMP VIEW_Y, 0
     JE NO_MOVE
-    SUB VIEW_Y, 10
+    SUB VIEW_Y, 16
     RET
 
 MOVE_DOWN:
     MOV AX, VIEW_Y
     ADD AX, VIEW_H
-    ADD AX, 10
+    ADD AX, 16
     CMP AX, IMG_H
     JAE NO_MOVE
-    ADD VIEW_Y, 10
+    ADD VIEW_Y, 16
     RET
 
 MOVE_LEFT:
     CMP VIEW_X, 0
     JE NO_MOVE
-    SUB VIEW_X, 10
+    SUB VIEW_X, 16
     RET
 
 MOVE_RIGHT:
     MOV AX, VIEW_X
     ADD AX, VIEW_W
-    ADD AX, 10
+    ADD AX, 16
     CMP AX, IMG_W
     JAE NO_MOVE
-    ADD VIEW_X, 10
+    ADD VIEW_X, 16
     RET
 
 NO_MOVE:
