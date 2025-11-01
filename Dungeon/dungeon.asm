@@ -30,6 +30,12 @@ MSG_OPEN_ERR   DB 'ERROR ABRIENDO EL ARCHIVO$', 0
 MSG_READ_ERR   DB 'ERROR LEYENDO EL ARCHIVO$', 0
 MSG_CONTROLS   DB 'WASD: Mover  Q: Salir$', 0
 MSG_POSITION   DB 'Viewport: $', 0
+MSG_CENTER_COLOR DB 'Centro: Color $', 0
+
+; ------------------ VARIABLES TEMPORALES --------------------
+TEMP_COLOR    DB 0FFh    ; Almacena temporalmente el color encontrado
+TEMP_X        DW 0       ; Posición X temporal para búsqueda
+TEMP_Y        DW 0       ; Posición Y temporal para búsqueda
 
 PLAYER_SPRITE db \
 'TTTTT000000TTTTT', \
@@ -48,6 +54,7 @@ PLAYER_SPRITE db \
 'TT06099990660TTT', \
 'TTT009009900TTTT', \
 'TTTT060T060TTTTT'
+
 ; ------------------ CÓDIGO PRINCIPAL ----------------------
 .CODE
 MAIN PROC
@@ -61,6 +68,8 @@ MAIN PROC
 
     CALL INIT_CURSOR
     MOV END_FLAG, 0
+    ;MOV VIEW_X, 64
+    ;MOV VIEW_Y, 0 
 
     ; Cargar y dibujar el mapa completo en memoria virtual
     CALL LOAD_ENTIRE_MAP
@@ -106,9 +115,6 @@ DRAW_PLAYER PROC
     PUSH DI
     
     ; Calcular posición del jugador en el centro del viewport
-    ; Centro X = LEFT_MARGIN + (VIEW_W * SCALE_FACTOR) / 2 - (PLAYER_SIZE * SCALE_FACTOR)/2
-    ; Centro Y = TOP_MARGIN + (VIEW_H * SCALE_FACTOR) / 2 - (PLAYER_SIZE * SCALE_FACTOR)/2
-    
     MOV AX, VIEW_W
     SHL AX, 1           ; AX = VIEW_W * 2 (escalado)
     SHR AX, 1           ; Dividir entre 2
@@ -245,13 +251,6 @@ READ_MAP_LOOP:
     JNE READ_MAP_LOOP
 
 MAP_LOADED:
-    ; Reiniciar file handle para posibles re-lecturas
-    MOV AX, FILE_HANDLE
-    PUSH AX
-    CALL CLOSE_FILE
-    CALL OPEN_FILE
-    MOV FILE_HANDLE, AX
-    POP AX
     RET
 LOAD_ENTIRE_MAP ENDP
 
@@ -285,8 +284,6 @@ NEXT_MAP_BYTE:
     JMP NEXT_MAP_BYTE
 
 IS_MAP_PIXEL:
-    ; Aquí podrías almacenar el pixel en un buffer de mapa completo
-    ; Por ahora solo avanzamos las coordenadas
     JMP MAP_STEP_X
 
 MAP_STEP_X:
@@ -327,10 +324,7 @@ DRAW_VIEWPORT PROC
     MOV END_FLAG, 0
     
     ; Posicionar archivo al inicio
-    MOV BX, FILE_HANDLE
-    CALL CLOSE_FILE
-    CALL OPEN_FILE
-    MOV FILE_HANDLE, AX
+    CALL REWIND_FILE
 
 DRAW_LOOP:
     CALL READ_CHUNK
@@ -416,7 +410,7 @@ VIEW_DONE:
     RET
 PARSE_AND_DRAW_VIEWPORT ENDP
 
-; ------------------ DIBUJO DE PIXEL ESCALADO CORREGIDO --------------------
+; ------------------ DIBUJO DE PIXEL ESCALADO --------------------
 DRAW_SCALED_PIXEL PROC
     ; AL = color
     ; CX = X relativo al viewport
@@ -559,9 +553,30 @@ DRAW_TEXT_INFO PROC
     MOV AX, VIEW_Y
     CALL PRINT_NUMBER
     
+    ; Nueva línea para el mensaje del color del centro
     MOV AH, 02h
     MOV BH, 0
     MOV DH, 23
+    MOV DL, 1
+    INT 10h
+    
+    LEA SI, MSG_CENTER_COLOR
+    CALL PRINT_GRAPHIC_TEXT
+    
+    ; Obtener y mostrar el color en el centro del viewport
+    MOV AX, VIEW_Y
+    ADD AX, 48          ; Centro Y = VIEW_Y + 48
+    MOV BX, VIEW_X
+    ADD BX, 80          ; Centro X = VIEW_X + 80
+    CALL CHECK_COLOR_AT_POSITION
+    
+    ; Mostrar el color numérico
+    MOV AH, 0
+    CALL PRINT_NUMBER
+    
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 24
     MOV DL, 1
     INT 10h
     
@@ -570,6 +585,168 @@ DRAW_TEXT_INFO PROC
     
     RET
 DRAW_TEXT_INFO ENDP
+
+; ------------------ VERIFICACIÓN DE COLOR --------------------
+CHECK_COLOR_AT_POSITION PROC
+    ; AX = Y tile position, BX = X tile position
+    ; Returns: AL = color del centro del tile (posición 8,8)
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+    
+    ; Calcular la posición del centro del tile (8,8)
+    ADD AX, 8
+    ADD BX, 8
+    
+    ; Llamar a la función que lee un píxel individual
+    CALL CHECK_SINGLE_COLOR_AT_POSITION
+    
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    RET
+CHECK_COLOR_AT_POSITION ENDP
+
+; ------------------ VERIFICACIÓN DE COLOR INDIVIDUAL --------------------
+CHECK_SINGLE_COLOR_AT_POSITION PROC
+    ; AX = Y position, BX = X position
+    ; Returns: AL = color at that position (0-15) or 0xFF if error
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+    PUSH DI
+    
+    ; Variables para almacenar el color encontrado
+    MOV BYTE PTR [TEMP_COLOR], 0FFh
+    
+    ; Usar variables temporales para la búsqueda
+    MOV [TEMP_X], BX
+    MOV [TEMP_Y], AX
+    
+    ; Guardar estado actual del archivo
+    PUSH WORD PTR X_CUR
+    PUSH WORD PTR Y_CUR
+    PUSH WORD PTR BUF_INDEX
+    PUSH WORD PTR BYTES_IN_BUFFER
+    PUSH AX                    ; Guardar END_FLAG temporalmente en AX
+    MOV AL, END_FLAG
+    PUSH AX
+    
+    ; Reiniciar para búsqueda
+    MOV WORD PTR X_CUR, 0
+    MOV WORD PTR Y_CUR, 0
+    MOV WORD PTR BUF_INDEX, 0
+    MOV BYTES_IN_BUFFER, 0
+    MOV END_FLAG, 0
+    
+    ; Posicionar archivo al inicio sin cerrarlo
+    CALL REWIND_FILE
+
+SCAN_FOR_POSITION:
+    CALL READ_CHUNK
+    CMP BYTES_IN_BUFFER, 0
+    JE SCAN_DONE_2
+
+    CALL SCAN_POSITION_FOR_COLOR
+    CMP END_FLAG, 1
+    JNE SCAN_FOR_POSITION
+
+SCAN_DONE_2:
+    ; Restaurar estado del archivo
+    POP AX                    ; Restaurar END_FLAG desde AX
+    MOV END_FLAG, AL
+    POP AX                    ; Restaurar AX original
+    POP BYTES_IN_BUFFER
+    POP BUF_INDEX
+    POP Y_CUR
+    POP X_CUR
+    
+    MOV AL, [TEMP_COLOR]
+    
+    POP DI
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    RET
+CHECK_SINGLE_COLOR_AT_POSITION ENDP
+
+; ------------------ SCAN PARA COLOR ESPECÍFICO --------------------
+SCAN_POSITION_FOR_COLOR PROC
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+
+NEXT_SCAN_BYTE:
+    MOV BX, BUF_INDEX
+    CMP BX, BYTES_IN_BUFFER
+    JAE SCAN_DONE
+    
+    MOV SI, BX
+    MOV AL, BUFFER[SI]
+    INC BX
+    MOV BUF_INDEX, BX
+
+    MOV DL, AL
+    CALL HEX_TO_NIBBLE
+    JNC IS_SCAN_PIXEL
+
+    MOV AL, DL
+    CMP AL, '@'
+    JE SCAN_END_LINE
+    CMP AL, '%'
+    JE SCAN_END_FILE
+    CMP AL, 13
+    JE NEXT_SCAN_BYTE
+    CMP AL, 10
+    JE NEXT_SCAN_BYTE
+    CMP AL, ' '
+    JE NEXT_SCAN_BYTE
+    JMP NEXT_SCAN_BYTE
+
+IS_SCAN_PIXEL:
+    ; Verificar si estamos en la posición buscada
+    MOV CX, X_CUR
+    CMP CX, [TEMP_X]
+    JNE SCAN_STEP_X
+    
+    MOV DX, Y_CUR
+    CMP DX, [TEMP_Y]
+    JNE SCAN_STEP_X
+    
+    ; ¡Encontramos la posición! Guardar el color
+    MOV [TEMP_COLOR], AL
+    MOV END_FLAG, 1
+    JMP SCAN_DONE
+
+SCAN_STEP_X:
+    INC WORD PTR X_CUR
+    JMP NEXT_SCAN_BYTE
+
+SCAN_END_LINE:
+    CALL SCAN_NEXT_ROW
+    JMP NEXT_SCAN_BYTE
+
+SCAN_END_FILE:
+    MOV END_FLAG, 1
+
+SCAN_DONE:
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+SCAN_POSITION_FOR_COLOR ENDP
+
+SCAN_NEXT_ROW PROC
+    INC WORD PTR Y_CUR
+    MOV WORD PTR X_CUR, 0
+    RET
+SCAN_NEXT_ROW ENDP
 
 PRINT_GRAPHIC_TEXT PROC
     ; Imprimir texto en modo gráfico
@@ -673,10 +850,17 @@ READ_CHUNK PROC
 READ_ERR:
     MOV BYTES_IN_BUFFER, 0
     MOV WORD PTR BUF_INDEX, 0
-    LEA DX, MSG_READ_ERR
-    CALL PRINT_STR
     RET
 READ_CHUNK ENDP
+
+REWIND_FILE PROC
+    MOV AX, 4200h        ; Función Mover puntero de archivo
+    MOV BX, FILE_HANDLE
+    XOR CX, CX           ; Offset alto = 0
+    XOR DX, DX           ; Offset bajo = 0  
+    INT 21h
+    RET
+REWIND_FILE ENDP
 
 ; ------------------ CONVERSOR HEX --------------------
 HEX_TO_NIBBLE PROC
