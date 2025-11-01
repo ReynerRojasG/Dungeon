@@ -13,6 +13,7 @@ VIEW_W         EQU 176
 VIEW_H         EQU 112
 SCALE_FACTOR   EQU 2     ; Factor de escalado 2x
 PLAYER_SIZE    EQU 16    ; Tamaño del sprite 16x16
+VALID_COLOR    EQU 8     ; Color válido para movimiento (gris oscuro)
 
 .DATA
 FILE_NAME      DB 'mapRD.txt', 0
@@ -25,6 +26,11 @@ X_CUR          DW 0
 Y_CUR          DW 0
 VIEW_X         DW 0
 VIEW_Y         DW 0
+
+NEW_VIEW_X    DW 0       ; Nueva posición X propuesta
+NEW_VIEW_Y    DW 0       ; Nueva posición Y propuesta
+CHECK_X       DW 0       ; Posición X para verificar color
+CHECK_Y       DW 0       ; Posición Y para verificar color
 
 MSG_OPEN_ERR   DB 'ERROR ABRIENDO EL ARCHIVO$', 0
 MSG_READ_ERR   DB 'ERROR LEYENDO EL ARCHIVO$', 0
@@ -461,6 +467,19 @@ VIEW_NEXT_ROW ENDP
 
 ; ------------------ NAVEGACIÓN --------------------
 PROCESS_KEY PROC
+    ; Guardar la tecla presionada
+    MOV AH, 0
+    PUSH AX
+    
+    ; Primero calcular la nueva posición propuesta
+    MOV AX, VIEW_X
+    MOV NEW_VIEW_X, AX
+    MOV AX, VIEW_Y
+    MOV NEW_VIEW_Y, AX
+    
+    ; Restaurar la tecla
+    POP AX
+    
     CMP AL, 'w'
     JE MOVE_UP
     CMP AL, 'W'
@@ -480,36 +499,91 @@ PROCESS_KEY PROC
     RET
 
 MOVE_UP:
-    CMP VIEW_Y, 0
-    JE NO_MOVE
-    SUB VIEW_Y, 16
+    CMP NEW_VIEW_Y, 0
+    JNE UP_CAN_MOVE
     RET
+UP_CAN_MOVE:
+    SUB NEW_VIEW_Y, 16
+    MOV AX, VIEW_Y
+    ADD AX, 48 - 16
+    MOV CHECK_Y, AX
+    MOV AX, VIEW_X
+    ADD AX, 80
+    MOV CHECK_X, AX
+    JMP CHECK_COLOR_AND_MOVE
 
 MOVE_DOWN:
-    MOV AX, VIEW_Y
+    MOV AX, NEW_VIEW_Y
     ADD AX, VIEW_H
     ADD AX, 16
     CMP AX, IMG_H
-    JAE NO_MOVE
-    ADD VIEW_Y, 16
+    JB DOWN_CAN_MOVE
     RET
+DOWN_CAN_MOVE:
+    ADD NEW_VIEW_Y, 16
+    MOV AX, VIEW_Y
+    ADD AX, 48 + 16
+    MOV CHECK_Y, AX
+    MOV AX, VIEW_X
+    ADD AX, 80
+    MOV CHECK_X, AX
+    JMP CHECK_COLOR_AND_MOVE
 
 MOVE_LEFT:
-    CMP VIEW_X, 0
-    JE NO_MOVE
-    SUB VIEW_X, 16
+    CMP NEW_VIEW_X, 0
+    JNE LEFT_CAN_MOVE
     RET
+LEFT_CAN_MOVE:
+    SUB NEW_VIEW_X, 16
+    MOV AX, VIEW_Y
+    ADD AX, 48
+    MOV CHECK_Y, AX
+    MOV AX, VIEW_X
+    ADD AX, 80 - 16
+    MOV CHECK_X, AX
+    JMP CHECK_COLOR_AND_MOVE
 
 MOVE_RIGHT:
-    MOV AX, VIEW_X
+    MOV AX, NEW_VIEW_X
     ADD AX, VIEW_W
     ADD AX, 16
     CMP AX, IMG_W
-    JAE NO_MOVE
-    ADD VIEW_X, 16
+    JB RIGHT_CAN_MOVE
     RET
+RIGHT_CAN_MOVE:
+    ADD NEW_VIEW_X, 16
+    MOV AX, VIEW_Y
+    ADD AX, 48
+    MOV CHECK_Y, AX
+    MOV AX, VIEW_X
+    ADD AX, 80 + 16
+    MOV CHECK_X, AX
+    JMP CHECK_COLOR_AND_MOVE
 
-NO_MOVE:
+CHECK_COLOR_AND_MOVE:
+    ; Verificar el color en la posición de destino
+    MOV AX, CHECK_Y
+    MOV BX, CHECK_X
+    CALL CHECK_COLOR_AT_POSITION
+    
+    ; Comparar con el color válido (8 = gris oscuro)
+    CMP AL, VALID_COLOR
+    JNE COLOR_INVALID
+    
+    ; Color válido - actualizar posición
+    MOV AX, NEW_VIEW_X
+    MOV VIEW_X, AX
+    MOV AX, NEW_VIEW_Y
+    MOV VIEW_Y, AX
+
+COLOR_INVALID:
+    ; REPOSICIONAR ARCHIVO para que DRAW_TEXT_INFO funcione correctamente
+    CALL REWIND_FILE
+    MOV WORD PTR X_CUR, 0
+    MOV WORD PTR Y_CUR, 0
+    MOV WORD PTR BUF_INDEX, 0
+    MOV BYTES_IN_BUFFER, 0
+    MOV END_FLAG, 0
     RET
 PROCESS_KEY ENDP
 
@@ -536,6 +610,8 @@ SHOW_INFO ENDP
 
 DRAW_TEXT_INFO PROC
     ; Usar funciones BIOS para dibujar texto en modo gráfico
+    
+    ; Mostrar posición del viewport (línea 22)
     MOV AH, 02h
     MOV BH, 0
     MOV DH, 22
@@ -553,30 +629,10 @@ DRAW_TEXT_INFO PROC
     MOV AX, VIEW_Y
     CALL PRINT_NUMBER
     
-    ; Nueva línea para el mensaje del color del centro
+    ; Mostrar controles (línea 23) - en lugar del color central
     MOV AH, 02h
     MOV BH, 0
     MOV DH, 23
-    MOV DL, 1
-    INT 10h
-    
-    LEA SI, MSG_CENTER_COLOR
-    CALL PRINT_GRAPHIC_TEXT
-    
-    ; Obtener y mostrar el color en el centro del viewport
-    MOV AX, VIEW_Y
-    ADD AX, 48          ; Centro Y = VIEW_Y + 48
-    MOV BX, VIEW_X
-    ADD BX, 80          ; Centro X = VIEW_X + 80
-    CALL CHECK_COLOR_AT_POSITION
-    
-    ; Mostrar el color numérico
-    MOV AH, 0
-    CALL PRINT_NUMBER
-    
-    MOV AH, 02h
-    MOV BH, 0
-    MOV DH, 24
     MOV DL, 1
     INT 10h
     
@@ -801,10 +857,11 @@ PRINT_CHAR PROC
 PRINT_CHAR ENDP
 
 CLEAR_SCREEN PROC
+    ; Limpiar solo el área gráfica (filas 0-21), no el área de texto (22-25)
     MOV AX, 0600h
     MOV BH, 0
-    MOV CX, 0000h
-    MOV DX, 184Fh
+    MOV CX, 0000h       ; Fila 0, Columna 0
+    MOV DX, 154Fh       ; Fila 21, Columna 79 (solo área gráfica)
     INT 10h
     RET
 CLEAR_SCREEN ENDP
