@@ -13,7 +13,6 @@ VIEW_W         EQU 176
 VIEW_H         EQU 112
 SCALE_FACTOR   EQU 2     ; Factor de escalado 2x
 PLAYER_SIZE    EQU 16    ; Tamaño del sprite 16x16
-VALID_COLOR    EQU 8     ; Color válido para movimiento (gris oscuro)
 
 .DATA
 FILE_NAME      DB 'mapRD.txt', 0
@@ -566,10 +565,16 @@ CHECK_COLOR_AND_MOVE:
     MOV BX, CHECK_X
     CALL CHECK_COLOR_AT_POSITION
     
-    ; Comparar con el color válido (8 = gris oscuro)
-    CMP AL, VALID_COLOR
-    JNE COLOR_INVALID
+    ; Comparar con los colores válidos (8=gris oscuro, 7=gris claro, 14=amarillo)
+    CMP AL, 8          ; Gris oscuro
+    JE COLOR_VALID
+    CMP AL, 7          ; Gris claro  
+    JE COLOR_VALID
+    CMP AL, 14         ; Amarillo
+    JE COLOR_VALID
+    JMP COLOR_INVALID  ; Si no es ninguno de los válidos
     
+COLOR_VALID:
     ; Color válido - actualizar posición
     MOV AX, NEW_VIEW_X
     MOV VIEW_X, AX
