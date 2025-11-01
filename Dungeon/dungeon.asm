@@ -8,7 +8,6 @@ IMG_W          EQU 480
 IMG_H          EQU 336
 LEFT_MARGIN    EQU (SCR_W - IMG_W) / 2
 TOP_MARGIN     EQU (SCR_H - IMG_H) / 2
-BUF_SIZE       EQU 4096
 VIEW_W         EQU 176
 VIEW_H         EQU 112
 SCALE_FACTOR   EQU 2     ; Factor de escalado 2x
@@ -17,10 +16,11 @@ PLAYER_SIZE    EQU 16    ; Tamaño del sprite 16x16
 .DATA
 FILE_NAME      DB 'mapRD.txt', 0
 FILE_HANDLE    DW 0
-BUFFER         DB BUF_SIZE DUP(?)
+BUFFER         DB 4096 DUP(?)
 BYTES_IN_BUFFER DW 0
 BUF_INDEX      DW 0
 END_FLAG       DB 0
+; ------------------ COORDENADAS --------------------
 X_CUR          DW 0
 Y_CUR          DW 0
 VIEW_X         DW 0
@@ -30,12 +30,60 @@ NEW_VIEW_X    DW 0       ; Nueva posición X propuesta
 NEW_VIEW_Y    DW 0       ; Nueva posición Y propuesta
 CHECK_X       DW 0       ; Posición X para verificar color
 CHECK_Y       DW 0       ; Posición Y para verificar color
+; ------------------ ITEM: MONEDAS --------------------
+COIN1_POSX    DW 32
+COIN1_POSY    DW 64
 
+COIN2_POSX    DW 48
+COIN2_POSY    DW 16
+
+COIN3_POSX    DW 176
+COIN3_POSY    DW 32
+
+COIN4_POSX    DW 32
+COIN4_POSY    DW 1760
+
+COIN5_POSX    DW 96
+COIN5_POSY    DW 1760
+; ------------------ ITEM: ESPADAS --------------------
+SWORD1_POSX   DW 64
+SWORD1_POSY   DW 28
+
+SWORD2_POSX   DW 144
+SWORD2_POSY   DW 48
+
+SWORD3_POSX   DW 208
+SWORD3_POSY   DW 64
+
+SWORD4_POSX   DW 80
+SWORD4_POSY   DW 2080
+
+SWORD5_POSX   DW 288
+SWORD5_POSY   DW 112
+; ------------------ ITEM: LLAVES --------------------
+KEY1_POSX     DW 112
+KEY1_POSY     DW 144
+
+KEY2_POSX     DW 144
+KEY2_POSY     DW 192
+
+KEY3_POSX     DW 224
+KEY3_POSY     DW 208
+
+KEY4_POSX     DW 224
+KEY4_POSY     DW 160
+
+KEY5_POSX     DW 256
+KEY5_POSY     DW 642
+; ------------------ MENSAJES --------------------
 MSG_OPEN_ERR   DB 'ERROR ABRIENDO EL ARCHIVO$', 0
 MSG_READ_ERR   DB 'ERROR LEYENDO EL ARCHIVO$', 0
+
 MSG_CONTROLS   DB 'WASD: Mover  Q: Salir$', 0
 MSG_POSITION   DB 'Viewport: $', 0
-MSG_CENTER_COLOR DB 'Centro: Color $', 0
+MSG_ITEMS_MONEDAS DB 'Monedas: $', 0
+MSG_ITEMS_ESPADAS DB 'Espadas: $', 0  
+MSG_ITEMS_LLAVES  DB 'Llaves: $', 0
 
 ; ------------------ VARIABLES TEMPORALES --------------------
 TEMP_COLOR    DB 0FFh    ; Almacena temporalmente el color encontrado
@@ -73,9 +121,6 @@ MAIN PROC
 
     CALL INIT_CURSOR
     MOV END_FLAG, 0
-    ;MOV VIEW_X, 64
-    ;MOV VIEW_Y, 0 
-
     ; Cargar y dibujar el mapa completo en memoria virtual
     CALL LOAD_ENTIRE_MAP
 
@@ -251,7 +296,6 @@ READ_MAP_LOOP:
     CMP BYTES_IN_BUFFER, 0
     JE MAP_LOADED
 
-    CALL PARSE_MAP_DATA
     CMP END_FLAG, 1
     JNE READ_MAP_LOOP
 
@@ -259,63 +303,9 @@ MAP_LOADED:
     RET
 LOAD_ENTIRE_MAP ENDP
 
-; ------------------ PARSER PARA CARGA --------------------
-PARSE_MAP_DATA PROC
-NEXT_MAP_BYTE:
-    MOV BX, BUF_INDEX
-    CMP BX, BYTES_IN_BUFFER
-    JAE MAP_DONE
-
-    MOV SI, BX
-    MOV AL, BUFFER[SI]
-    INC BX
-    MOV BUF_INDEX, BX
-
-    MOV DL, AL
-    CALL HEX_TO_NIBBLE
-    JNC IS_MAP_PIXEL
-
-    MOV AL, DL
-    CMP AL, '@'
-    JE MAP_END_LINE
-    CMP AL, '%'
-    JE MAP_END_FILE
-    CMP AL, 13
-    JE NEXT_MAP_BYTE
-    CMP AL, 10
-    JE NEXT_MAP_BYTE
-    CMP AL, ' '
-    JE NEXT_MAP_BYTE
-    JMP NEXT_MAP_BYTE
-
-IS_MAP_PIXEL:
-    JMP MAP_STEP_X
-
-MAP_STEP_X:
-    INC WORD PTR X_CUR
-    JMP NEXT_MAP_BYTE
-
-MAP_END_LINE:
-    CALL MAP_NEXT_ROW
-    JMP NEXT_MAP_BYTE
-
-MAP_END_FILE:
-    MOV END_FLAG, 1
-
-MAP_DONE:
-    RET
-PARSE_MAP_DATA ENDP
-
-MAP_NEXT_ROW PROC
-    INC WORD PTR Y_CUR
-    MOV WORD PTR X_CUR, 0
-    RET
-MAP_NEXT_ROW ENDP
-
 ; ------------------ DIBUJO DEL VIEWPORT --------------------
 DRAW_VIEWPORT PROC
-    ; Esta función dibuja solo la porción visible del mapa
-    ; basado en VIEW_X y VIEW_Y
+    ; Esta función dibuja solo la porción visible del mapa basado en VIEW_X y VIEW_Y
     PUSH AX
     PUSH BX
     PUSH CX
@@ -592,7 +582,7 @@ COLOR_INVALID:
     RET
 PROCESS_KEY ENDP
 
-; ------------------ INTERFAZ --------------------
+; ------------------ INTERFAZ DE TEXTO --------------------
 SHOW_INFO PROC
     ; Mostrar información en modo texto sobre el gráfico
     PUSH AX
@@ -614,19 +604,16 @@ SHOW_INFO PROC
 SHOW_INFO ENDP
 
 DRAW_TEXT_INFO PROC
-    ; Usar funciones BIOS para dibujar texto en modo gráfico
-    
-    ; Mostrar posición del viewport (línea 22)
+    ; Mostrar posición del viewport (línea 21 - más arriba)
     MOV AH, 02h
     MOV BH, 0
-    MOV DH, 22
+    MOV DH, 21
     MOV DL, 1
     INT 10h
     
     LEA SI, MSG_POSITION
     CALL PRINT_GRAPHIC_TEXT
     
-    ; Mostrar coordenadas del viewport
     MOV AX, VIEW_X
     CALL PRINT_NUMBER
     MOV AL, ','
@@ -634,10 +621,40 @@ DRAW_TEXT_INFO PROC
     MOV AX, VIEW_Y
     CALL PRINT_NUMBER
     
-    ; Mostrar controles (línea 23) - en lugar del color central
+    ; Mostrar monedas a la derecha (columna 40)
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 21
+    MOV DL, 40
+    INT 10h
+    
+    LEA SI, MSG_ITEMS_MONEDAS
+    CALL PRINT_GRAPHIC_TEXT
+    
+    ; Mostrar espadas a la derecha (línea 22)
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 22
+    MOV DL, 40
+    INT 10h
+    
+    LEA SI, MSG_ITEMS_ESPADAS
+    CALL PRINT_GRAPHIC_TEXT
+    
+    ; Mostrar llaves a la derecha (línea 23)
     MOV AH, 02h
     MOV BH, 0
     MOV DH, 23
+    MOV DL, 40
+    INT 10h
+    
+    LEA SI, MSG_ITEMS_LLAVES
+    CALL PRINT_GRAPHIC_TEXT
+    
+    ; Mostrar controles (línea 24)
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 24
     MOV DL, 1
     INT 10h
     
@@ -809,6 +826,7 @@ SCAN_NEXT_ROW PROC
     RET
 SCAN_NEXT_ROW ENDP
 
+; ------------------ VIDEO ----------------------
 PRINT_GRAPHIC_TEXT PROC
     ; Imprimir texto en modo gráfico
     MOV AH, 0Eh
@@ -866,12 +884,11 @@ CLEAR_SCREEN PROC
     MOV AX, 0600h
     MOV BH, 0
     MOV CX, 0000h       ; Fila 0, Columna 0
-    MOV DX, 154Fh       ; Fila 21, Columna 79 (solo área gráfica)
+    MOV DX, 144Fh       ; Fila 21, Columna 79 (solo área gráfica)
     INT 10h
     RET
 CLEAR_SCREEN ENDP
 
-; ------------------ VIDEO ----------------------
 SET_VIDEO_MODE PROC
     MOV AX, 0010H
     INT 10H
@@ -901,7 +918,7 @@ CLOSE_FILE ENDP
 READ_CHUNK PROC
     MOV BX, FILE_HANDLE
     MOV DX, OFFSET BUFFER
-    MOV CX, BUF_SIZE
+    MOV CX, 4096
     MOV AH, 3FH
     INT 21H
     JC READ_ERR
