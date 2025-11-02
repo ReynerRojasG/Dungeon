@@ -41,13 +41,21 @@ COIN3_POSX    DW 176
 COIN3_POSY    DW 32
 
 COIN4_POSX    DW 32
-COIN4_POSY    DW 1760
+COIN4_POSY    DW 176
 
 COIN5_POSX    DW 96
-COIN5_POSY    DW 1760
+COIN5_POSY    DW 176
+
+;ESTADOS DE LAS MONEDAS:
+COIN1_COLLECTED DB 0
+COIN2_COLLECTED DB 0
+COIN3_COLLECTED DB 0
+COIN4_COLLECTED DB 0
+COIN5_COLLECTED DB 0
+
 ; ------------------ ITEM: ESPADAS --------------------
 SWORD1_POSX   DW 64
-SWORD1_POSY   DW 28
+SWORD1_POSY   DW 128
 
 SWORD2_POSX   DW 144
 SWORD2_POSY   DW 48
@@ -56,10 +64,18 @@ SWORD3_POSX   DW 208
 SWORD3_POSY   DW 64
 
 SWORD4_POSX   DW 80
-SWORD4_POSY   DW 2080
+SWORD4_POSY   DW 208
 
-SWORD5_POSX   DW 288
-SWORD5_POSY   DW 112
+SWORD5_POSX   DW 288 
+SWORD5_POSY   DW 112 
+
+;ESTADOS DE LAS ESPADAS:
+SWORD1_COLLECTED DB 0
+SWORD2_COLLECTED DB 0
+SWORD3_COLLECTED DB 0
+SWORD4_COLLECTED DB 0
+SWORD5_COLLECTED DB 0
+
 ; ------------------ ITEM: LLAVES --------------------
 KEY1_POSX     DW 112
 KEY1_POSY     DW 144
@@ -74,16 +90,35 @@ KEY4_POSX     DW 224
 KEY4_POSY     DW 160
 
 KEY5_POSX     DW 256
-KEY5_POSY     DW 642
+KEY5_POSY     DW 64
+
+;ESTADOS DE LAS LLAVES:
+KEY1_COLLECTED DB 0
+KEY2_COLLECTED DB 0
+KEY3_COLLECTED DB 0
+KEY4_COLLECTED DB 0
+KEY5_COLLECTED DB 0
+
+; ------------------ CONTADOR DE ITEMS --------------------
+COIN_COUNT DW 0
+SWORD_COUNT DW 0
+KEY_COUNT  DW 0
+
+TOTAL_ITEMS EQU 15      ; 5 monedas + 5 espadas + 5 llaves
+PROGRESS_VALUE DW 0     ; Valor del progreso (0-100)
+PROGRESS_INT DW 0       ; Parte entera del progreso
+PROGRESS_DEC DW 0       ; Parte decimal del progreso
 ; ------------------ MENSAJES --------------------
 MSG_OPEN_ERR   DB 'ERROR ABRIENDO EL ARCHIVO$', 0
 MSG_READ_ERR   DB 'ERROR LEYENDO EL ARCHIVO$', 0
 
 MSG_CONTROLS   DB 'WASD: Mover  Q: Salir$', 0
 MSG_POSITION   DB 'Viewport: $', 0
-MSG_ITEMS_MONEDAS DB 'Monedas: $', 0
-MSG_ITEMS_ESPADAS DB 'Espadas: $', 0  
-MSG_ITEMS_LLAVES  DB 'Llaves: $', 0
+MSG_ITEMS_COINS DB 'Monedas: $', 0
+MSG_ITEMS_SWORDS DB 'Espadas: $', 0  
+MSG_ITEMS_KEYS  DB 'Llaves: $', 0
+MSG_PROGRESS  DB 'Progreso: $', 0
+MSG_VICTORIA DB 'VICTORIA! Has recolectado todos los items minimos$', 0
 
 ; ------------------ VARIABLES TEMPORALES --------------------
 TEMP_COLOR    DB 0FFh    ; Almacena temporalmente el color encontrado
@@ -121,10 +156,19 @@ MAIN PROC
 
     CALL INIT_CURSOR
     MOV END_FLAG, 0
+    ; Inicializar progreso a 0
+    MOV PROGRESS_VALUE, 0
+    MOV PROGRESS_INT, 0
+    MOV PROGRESS_DEC, 0
     ; Cargar y dibujar el mapa completo en memoria virtual
     CALL LOAD_ENTIRE_MAP
 
 NAVIGATION_LOOP:
+    ; Verificar condición de victoria
+    CALL CHECK_VICTORY_CONDITION
+    CMP AX, 1
+    JE VICTORY_SCREEN
+    
     CALL CLEAR_SCREEN
     CALL DRAW_VIEWPORT
     CALL DRAW_PLAYER     ; Dibujar jugador después del mapa
@@ -138,6 +182,11 @@ NAVIGATION_LOOP:
     
     CALL PROCESS_KEY
     JMP NAVIGATION_LOOP
+
+VICTORY_SCREEN:
+    CALL SHOW_VICTORY
+    CALL WAIT_KEY
+    JMP EXIT_PROGRAM
 
 EXIT_PROGRAM:
     MOV BX, FILE_HANDLE
@@ -561,15 +610,16 @@ CHECK_COLOR_AND_MOVE:
     CMP AL, 7          ; Gris claro  
     JE COLOR_VALID
     CMP AL, 14         ; Amarillo
-    JE COLOR_VALID
+    JE COLOR_VALID 
     JMP COLOR_INVALID  ; Si no es ninguno de los válidos
-    
+
 COLOR_VALID:
     ; Color válido - actualizar posición
     MOV AX, NEW_VIEW_X
     MOV VIEW_X, AX
     MOV AX, NEW_VIEW_Y
     MOV VIEW_Y, AX
+    CALL COLLECT_ITEM
 
 COLOR_INVALID:
     ; REPOSICIONAR ARCHIVO para que DRAW_TEXT_INFO funcione correctamente
@@ -621,6 +671,25 @@ DRAW_TEXT_INFO PROC
     MOV AX, VIEW_Y
     CALL PRINT_NUMBER
     
+    ; Mostrar progreso debajo de viewport (línea 22)
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 22
+    MOV DL, 1
+    INT 10h
+    LEA SI, MSG_PROGRESS
+    CALL PRINT_GRAPHIC_TEXT    
+    ; Mostrar parte entera del progreso
+    MOV AX, PROGRESS_INT
+    CALL PRINT_NUMBER
+
+    ; Mostrar símbolo de porcentaje
+    MOV AL, '%'
+    CALL PRINT_CHAR
+    
+    ; Verificar si hay monedas recolectadas
+    CMP COIN_COUNT, 0
+    JE MOSTRAR_ESPADAS    ; Si es 0, saltar a espadas
     ; Mostrar monedas a la derecha (columna 40)
     MOV AH, 02h
     MOV BH, 0
@@ -628,19 +697,31 @@ DRAW_TEXT_INFO PROC
     MOV DL, 40
     INT 10h
     
-    LEA SI, MSG_ITEMS_MONEDAS
+    LEA SI, MSG_ITEMS_COINS
     CALL PRINT_GRAPHIC_TEXT
-    
+    MOV AX, COIN_COUNT
+    CALL PRINT_NUMBER
+
+MOSTRAR_ESPADAS:
+
+    ; Verificar si hay espadas recolectadas
+    CMP SWORD_COUNT, 0
+    JE MOSTRAR_LLAVES     ; Si es 0, saltar a llaves
     ; Mostrar espadas a la derecha (línea 22)
     MOV AH, 02h
     MOV BH, 0
     MOV DH, 22
     MOV DL, 40
     INT 10h
-    
-    LEA SI, MSG_ITEMS_ESPADAS
+    LEA SI, MSG_ITEMS_SWORDS
     CALL PRINT_GRAPHIC_TEXT
-    
+    MOV AX, SWORD_COUNT
+    CALL PRINT_NUMBER
+
+MOSTRAR_LLAVES:
+    ; Verificar si hay llaves recolectadas
+    CMP KEY_COUNT, 0
+    JE FIN_MOSTRAR_ITEMS  ; Si es 0, saltar al final
     ; Mostrar llaves a la derecha (línea 23)
     MOV AH, 02h
     MOV BH, 0
@@ -648,9 +729,11 @@ DRAW_TEXT_INFO PROC
     MOV DL, 40
     INT 10h
     
-    LEA SI, MSG_ITEMS_LLAVES
+    LEA SI, MSG_ITEMS_KEYS
     CALL PRINT_GRAPHIC_TEXT
-    
+    MOV AX, KEY_COUNT
+    CALL PRINT_NUMBER
+    FIN_MOSTRAR_ITEMS:
     ; Mostrar controles (línea 24)
     MOV AH, 02h
     MOV BH, 0
@@ -880,14 +963,24 @@ PRINT_CHAR PROC
 PRINT_CHAR ENDP
 
 CLEAR_SCREEN PROC
-    ; Limpiar solo el área gráfica (filas 0-21), no el área de texto (22-25)
+    ; Limpiar toda la pantalla (modo victoria necesita limpiar todo)
     MOV AX, 0600h
     MOV BH, 0
     MOV CX, 0000h       ; Fila 0, Columna 0
-    MOV DX, 144Fh       ; Fila 21, Columna 79 (solo área gráfica)
+    MOV DX, 144Fh       ; Fila 24, Columna 79 (toda la pantalla)
     INT 10h
     RET
 CLEAR_SCREEN ENDP
+
+CLEAR_FULL_SCREEN PROC
+    ; Limpiar TODA la pantalla (filas 0-24)
+    MOV AX, 0600h
+    MOV BH, 0
+    MOV CX, 0000h       ; Fila 0, Columna 0
+    MOV DX, 184Fh       ; Fila 24, Columna 79 (toda la pantalla)
+    INT 10h
+    RET
+CLEAR_FULL_SCREEN ENDP
 
 SET_VIDEO_MODE PROC
     MOV AX, 0010H
@@ -1001,5 +1094,435 @@ PRINT_STR PROC
     INT 21H
     RET
 PRINT_STR ENDP
+
+; ------------------ CALCULAR PROGRESO --------------------
+CALCULATE_PROGRESS PROC
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    
+    ; Calcular progreso basado en items recolectados (máximo 6 items = 100%)
+    ; Cada item vale 16.67% ≈ 17% (redondeado)
+    
+    ; Sumar items recolectados (limitando a 2 por tipo)
+    MOV AX, 0
+    
+    ; Monedas (máximo 2)
+    MOV BX, COIN_COUNT
+    CMP BX, 2
+    JBE ADD_COINS
+    MOV BX, 2
+ADD_COINS:
+    ADD AX, BX
+    
+    ; Espadas (máximo 2)
+    MOV BX, SWORD_COUNT
+    CMP BX, 2
+    JBE ADD_SWORDS
+    MOV BX, 2
+ADD_SWORDS:
+    ADD AX, BX
+    
+    ; Llaves (máximo 2)
+    MOV BX, KEY_COUNT
+    CMP BX, 2
+    JBE ADD_KEYS
+    MOV BX, 2
+ADD_KEYS:
+    ADD AX, BX
+    
+    ; AX ahora tiene el total de items válidos (0-6)
+    
+    ; Calcular porcentaje entero = (items * 100) / 6
+    MOV BX, 100
+    MUL BX              ; DX:AX = items * 100
+    
+    ; Dividir entre 6 para obtener porcentaje entero
+    MOV BX, 6
+    DIV BX              ; AX = porcentaje entero
+    
+    MOV PROGRESS_INT, AX
+    
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+CALCULATE_PROGRESS ENDP
+
+; ------------------ RECOLECTAR OBJETOS --------------------
+COLLECT_ITEM PROC
+    PUSH BX
+    PUSH CX
+    MOV BX, VIEW_X
+    MOV CX, VIEW_Y
+    
+    ; Guardar contadores antes
+    MOV AX, COIN_COUNT
+    MOV DX, SWORD_COUNT
+    MOV SI, KEY_COUNT
+    
+    ;MONEDAS
+    CALL CHECK_COIN1
+    CALL CHECK_COIN2
+    CALL CHECK_COIN3
+    CALL CHECK_COIN4  
+    CALL CHECK_COIN5
+    
+    ;ESPADAS
+    CALL CHECK_SWORD1
+    CALL CHECK_SWORD2
+    CALL CHECK_SWORD3
+    CALL CHECK_SWORD4
+    CALL CHECK_SWORD5
+    
+    ;LLAVES
+    CALL CHECK_KEY1
+    CALL CHECK_KEY2
+    CALL CHECK_KEY3
+    CALL CHECK_KEY4
+    CALL CHECK_KEY5
+    
+    ; Verificar si algún contador cambió
+    CMP AX, COIN_COUNT
+    JNE UPDATE_PROGRESS
+    CMP DX, SWORD_COUNT
+    JNE UPDATE_PROGRESS
+    CMP SI, KEY_COUNT
+    JNE UPDATE_PROGRESS
+    JMP NO_UPDATE
+    
+UPDATE_PROGRESS:
+    CALL CALCULATE_PROGRESS
+    
+NO_UPDATE:
+    POP CX
+    POP BX
+    RET
+COLLECT_ITEM ENDP
+
+;------------------ CHECKS DE MONEDAS ------------------
+
+CHECK_COIN1 PROC
+    CMP BX, COIN1_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_COIN1_END
+    CMP CX, COIN1_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_COIN1_END
+    
+    CMP COIN1_COLLECTED, 1
+    JE CHECK_COIN1_END    ; Ya recolectada
+    
+    INC COIN_COUNT
+    MOV COIN1_COLLECTED, 1
+    
+CHECK_COIN1_END:
+    RET
+CHECK_COIN1 ENDP
+
+CHECK_COIN2 PROC
+    CMP BX, COIN2_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_COIN2_END
+    CMP CX, COIN2_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_COIN2_END
+    
+    CMP COIN2_COLLECTED, 1
+    JE CHECK_COIN2_END    ; Ya recolectada
+    
+    INC COIN_COUNT
+    MOV COIN2_COLLECTED, 1
+    
+CHECK_COIN2_END:
+    RET
+CHECK_COIN2 ENDP
+
+CHECK_COIN3 PROC
+    CMP BX, COIN3_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_COIN3_END
+    CMP CX, COIN3_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_COIN3_END
+    
+    CMP COIN3_COLLECTED, 1
+    JE CHECK_COIN3_END    ; Ya recolectada
+    
+    INC COIN_COUNT
+    MOV COIN3_COLLECTED, 1
+    
+CHECK_COIN3_END:
+    RET
+CHECK_COIN3 ENDP
+
+CHECK_COIN4 PROC
+    CMP BX, COIN4_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_COIN4_END
+    CMP CX, COIN4_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_COIN4_END
+    
+    CMP COIN4_COLLECTED, 1
+    JE CHECK_COIN4_END    ; Ya recolectada
+    
+    INC COIN_COUNT
+    MOV COIN4_COLLECTED, 1
+    
+CHECK_COIN4_END:
+    RET
+CHECK_COIN4 ENDP
+
+CHECK_COIN5 PROC
+    CMP BX, COIN5_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_COIN5_END
+    CMP CX, COIN5_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_COIN5_END
+    
+    CMP COIN5_COLLECTED, 1
+    JE CHECK_COIN5_END    ; Ya recolectada
+    
+    INC COIN_COUNT
+    MOV COIN5_COLLECTED, 1
+    
+CHECK_COIN5_END:
+    RET
+CHECK_COIN5 ENDP
+
+;------------------ CHECKS DE ESPADAS ------------------
+CHECK_SWORD1 PROC
+    CMP BX, SWORD1_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_SWORD1_END
+    CMP CX, SWORD1_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_SWORD1_END
+    
+    CMP SWORD1_COLLECTED, 1
+    JE CHECK_SWORD1_END    ; Ya recolectada
+    
+    INC SWORD_COUNT
+    MOV SWORD1_COLLECTED, 1
+    
+CHECK_SWORD1_END:
+    RET
+CHECK_SWORD1 ENDP
+
+CHECK_SWORD2 PROC
+    CMP BX, SWORD2_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_SWORD2_END
+    CMP CX, SWORD2_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_SWORD2_END
+    
+    CMP SWORD2_COLLECTED, 1
+    JE CHECK_SWORD2_END    ; Ya recolectada
+    
+    INC SWORD_COUNT
+    MOV SWORD2_COLLECTED, 1
+    
+CHECK_SWORD2_END:
+    RET
+CHECK_SWORD2 ENDP
+
+CHECK_SWORD3 PROC
+    CMP BX, SWORD3_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_SWORD3_END
+    CMP CX, SWORD3_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_SWORD3_END
+    
+    CMP SWORD3_COLLECTED, 1
+    JE CHECK_SWORD3_END    ; Ya recolectada
+    
+    INC SWORD_COUNT
+    MOV SWORD3_COLLECTED, 1
+    
+CHECK_SWORD3_END:
+    RET
+CHECK_SWORD3 ENDP
+
+CHECK_SWORD4 PROC
+    CMP BX, SWORD4_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_SWORD4_END
+    CMP CX, SWORD4_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_SWORD4_END
+    
+    CMP SWORD4_COLLECTED, 1
+    JE CHECK_SWORD4_END    ; Ya recolectada
+    
+    INC SWORD_COUNT
+    MOV SWORD4_COLLECTED, 1
+    
+CHECK_SWORD4_END:
+    RET
+CHECK_SWORD4 ENDP
+
+CHECK_SWORD5 PROC
+    CMP BX, SWORD5_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_SWORD5_END
+    CMP CX, SWORD5_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_SWORD5_END
+    
+    CMP SWORD5_COLLECTED, 1
+    JE CHECK_SWORD5_END    ; Ya recolectada
+    
+    INC SWORD_COUNT
+    MOV SWORD5_COLLECTED, 1
+    
+CHECK_SWORD5_END:
+    RET
+CHECK_SWORD5 ENDP
+
+;------------------ CHECKS DE LLAVES ------------------
+CHECK_KEY1 PROC
+    CMP BX, KEY1_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_KEY1_END
+    CMP CX, KEY1_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_KEY1_END
+    
+    CMP KEY1_COLLECTED, 1
+    JE CHECK_KEY1_END    ; Ya recolectada
+    
+    INC KEY_COUNT
+    MOV KEY1_COLLECTED, 1
+    
+CHECK_KEY1_END:
+    RET
+CHECK_KEY1 ENDP
+
+CHECK_KEY2 PROC
+    CMP BX, KEY2_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_KEY2_END
+    CMP CX, KEY2_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_KEY2_END
+    
+    CMP KEY2_COLLECTED, 1
+    JE CHECK_KEY2_END    ; Ya recolectada
+    
+    INC KEY_COUNT
+    MOV KEY2_COLLECTED, 1
+    
+CHECK_KEY2_END:
+    RET
+CHECK_KEY2 ENDP
+
+CHECK_KEY3 PROC
+    CMP BX, KEY3_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_KEY3_END
+    CMP CX, KEY3_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_KEY3_END
+    
+    CMP KEY3_COLLECTED, 1
+    JE CHECK_KEY3_END    ; Ya recolectada
+    
+    INC KEY_COUNT
+    MOV KEY3_COLLECTED, 1
+    
+CHECK_KEY3_END:
+    RET
+CHECK_KEY3 ENDP
+
+CHECK_KEY4 PROC
+    CMP BX, KEY4_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_KEY4_END
+    CMP CX, KEY4_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_KEY4_END
+    
+    CMP KEY4_COLLECTED, 1
+    JE CHECK_KEY4_END    ; Ya recolectada
+    
+    INC KEY_COUNT
+    MOV KEY4_COLLECTED, 1
+    
+CHECK_KEY4_END:
+    RET
+CHECK_KEY4 ENDP
+
+CHECK_KEY5 PROC
+    CMP BX, KEY5_POSX    ; BX ya tiene VIEW_X
+    JNE CHECK_KEY5_END
+    CMP CX, KEY5_POSY    ; CX ya tiene VIEW_Y
+    JNE CHECK_KEY5_END
+    
+    CMP KEY5_COLLECTED, 1
+    JE CHECK_KEY5_END    ; Ya recolectada
+    
+    INC KEY_COUNT
+    MOV KEY5_COLLECTED, 1
+    
+CHECK_KEY5_END:
+    RET
+CHECK_KEY5 ENDP
+
+; ------------------ VERIFICAR VICTORIA --------------------
+CHECK_VICTORY_CONDITION PROC
+    ; Verificar si todos los contadores son >= 2
+    CMP COIN_COUNT, 2
+    JL NO_VICTORY      ; Si COIN_COUNT < 2, no victoria
+    CMP SWORD_COUNT, 2
+    JL NO_VICTORY      ; Si SWORD_COUNT < 2, no victoria  
+    CMP KEY_COUNT, 2
+    JL NO_VICTORY      ; Si KEY_COUNT < 2, no victoria
+    
+    MOV AX, 1           ; Indicar victoria
+    RET
+
+NO_VICTORY:
+    MOV AX, 0
+    RET
+CHECK_VICTORY_CONDITION ENDP
+
+; ------------------ PANTALLA DE VICTORIA --------------------
+SHOW_VICTORY PROC
+    CALL CLEAR_FULL_SCREEN
+    
+    ; Posicionar cursor más arriba en la pantalla
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 8           ; Fila 8 (más arriba)
+    MOV DL, 20          ; Columna 20 (centro horizontal)
+    INT 10h
+    
+    ; Mostrar mensaje de victoria
+    LEA SI, MSG_VICTORIA
+    CALL PRINT_GRAPHIC_TEXT
+    
+    ; Mostrar estadísticas finales
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 10          ; Fila 10
+    MOV DL, 20
+    INT 10h
+    
+    LEA SI, MSG_ITEMS_COINS
+    CALL PRINT_GRAPHIC_TEXT
+    MOV AX, COIN_COUNT
+    CALL PRINT_NUMBER
+    
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 11          ; Fila 11
+    MOV DL, 20
+    INT 10h
+    
+    LEA SI, MSG_ITEMS_SWORDS
+    CALL PRINT_GRAPHIC_TEXT
+    MOV AX, SWORD_COUNT
+    CALL PRINT_NUMBER
+    
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 12          ; Fila 12
+    MOV DL, 20
+    INT 10h
+    
+    LEA SI, MSG_ITEMS_KEYS
+    CALL PRINT_GRAPHIC_TEXT
+    MOV AX, KEY_COUNT
+    CALL PRINT_NUMBER
+    
+    MOV AH, 02h
+    MOV BH, 0
+    MOV DH, 14          ; Fila 14
+    MOV DL, 20
+    INT 10h
+    
+    MOV SI, OFFSET MSG_CONTROLS
+    CALL PRINT_GRAPHIC_TEXT
+    
+    RET
+SHOW_VICTORY ENDP
 
 END MAIN
